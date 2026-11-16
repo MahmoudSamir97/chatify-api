@@ -15,7 +15,10 @@ const protectRoute = catchAsync(async (req, res, next) => {
 
   const user = await User.findById(decoded.userId).select('-password');
 
-  if (!user) return next(new AppError(404, 'User not found'));
+  if (!user)
+    return next(
+      new AppError(401, 'The user belonging to this token no longer exists'),
+    );
 
   req.user = user;
 

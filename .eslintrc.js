@@ -6,7 +6,12 @@ module.exports = {
     node: true,
   },
   extends: 'eslint:recommended',
+  ignorePatterns: ['node_modules/', 'coverage/'],
   overrides: [
+    {
+      files: ['tests/**/*.js'],
+      env: { jest: true },
+    },
     {
       env: {
         node: true,

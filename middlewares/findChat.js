@@ -1,3 +1,4 @@
+const { isValidObjectId } = require('mongoose');
 const Chat = require('../models/chatModel.js');
 const User = require('../models/userModel.js');
 const AppError = require('../utils/error-handlers/AppError.js');
@@ -6,14 +7,15 @@ const { catchAsync } = require('../utils/error-handlers/catchAsync.js');
 const findPrivateChat = catchAsync(async (req, res, next) => {
   const { userId } = req.body;
 
-  if (!userId) return next(new AppError(400, 'User not provided'));
+  if (!userId || !isValidObjectId(userId))
+    return next(new AppError(400, 'A valid user id is required'));
+
+  if (String(userId) === String(req.user._id))
+    return next(new AppError(400, 'You cannot start a chat with yourself'));
 
   let newChatWithPopulated = await Chat.findOne({
     isGroupChat: false,
-    $and: [
-      { users: { $elemMatch: { $eq: req.user._id } } },
-      { users: { $elemMatch: { $eq: userId } } },
-    ],
+    users: { $all: [req.user._id, userId] },
   })
     .populate('users')
     .populate('latestMessage');

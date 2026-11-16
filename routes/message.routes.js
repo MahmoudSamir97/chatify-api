@@ -1,5 +1,6 @@
 const messageRouter = require('express').Router();
 const protectRoute = require('../middlewares/protectRoute');
+const chatAccess = require('../middlewares/chatAccess');
 const {
   getMessages,
   sendMessage,
@@ -7,8 +8,8 @@ const {
 
 messageRouter.use(protectRoute);
 
-messageRouter.get('/:chatId', getMessages);
+messageRouter.get('/:chatId', chatAccess(), getMessages);
 
-messageRouter.post('/', sendMessage);
+messageRouter.post('/', chatAccess(), sendMessage);
 
 module.exports = messageRouter;

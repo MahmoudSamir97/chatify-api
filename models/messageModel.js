@@ -18,6 +18,9 @@ const messageSchema = new Schema(
   { timestamps: true },
 );
 
+// Messages are always loaded per chat in chronological order
+messageSchema.index({ chat: 1, createdAt: 1 });
+
 const Message = model('Message', messageSchema);
 
 module.exports = Message;

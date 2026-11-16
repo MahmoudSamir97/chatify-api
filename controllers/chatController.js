@@ -1,11 +1,18 @@
+const { isValidObjectId } = require('mongoose');
 const Chat = require('../models/chatModel');
+const Message = require('../models/messageModel');
 const User = require('../models/userModel');
-const { uploadImage } = require('../services/cloudinary');
+const { uploadImage, destroy } = require('../services/cloudinary');
 const AppError = require('../utils/error-handlers/AppError');
 const { catchAsync } = require('../utils/error-handlers/catchAsync');
 
+const populateChat = (query) => query.populate('users').populate('groupAdmin');
+
 exports.createPrivateChat = catchAsync(async (req, res, next) => {
-  const { userId } = req.body;
+  const { userId } = req.body; // validated by the findPrivateChat middleware
+
+  if (!(await User.exists({ _id: userId })))
+    return next(new AppError(404, 'User not found'));
 
   const newChat = await Chat.create({
     isGroupChat: false,
@@ -13,23 +20,16 @@ exports.createPrivateChat = catchAsync(async (req, res, next) => {
   });
 
   const newChatWithPopulated = await Chat.findById(newChat._id).populate(
-    'users'
+    'users',
   );
 
   res.status(201).json({ newChatWithPopulated });
 });
 
 exports.fetchChats = catchAsync(async (req, res, next) => {
-  const userChats = await Chat.find({
-    users: { $elemMatch: { $eq: req.user._id } },
-  })
-    .populate('users')
-    .populate('groupAdmin')
+  const userChats = await populateChat(Chat.find({ users: req.user._id }))
     .populate('latestMessage')
     .sort({ updatedAt: -1 });
-
-  if (!userChats)
-    return next(new AppError(404, 'No chats Found for this user'));
 
   const populatedChats = await User.populate(userChats, {
     path: 'latestMessage.sender',
@@ -42,138 +42,101 @@ exports.fetchChats = catchAsync(async (req, res, next) => {
 exports.createGroupChat = catchAsync(async (req, res) => {
   const { groupName } = req.body;
 
-  let secure_url, public_id;
-
-  if (req.file) {
-    const { secure_url: url, public_id: Id } = await uploadImage(req.file);
-    secure_url = url;
-    public_id = Id;
-  }
+  const chatImage = req.file ? await uploadImage(req.file) : undefined;
 
   const groupChat = await Chat.create({
-    chatName: groupName,
+    chatName: groupName.trim(),
     users: req.users,
     isGroupChat: true,
-    chatImage: {
-      secure_url,
-      public_id,
-    },
+    chatImage,
     groupAdmin: req.user._id,
   });
 
-  const populatedGroupChat = await Chat.findById(groupChat._id)
-    .populate('users')
-    .populate('groupAdmin');
+  const populatedGroupChat = await populateChat(Chat.findById(groupChat._id));
 
-  res.status(200).json(populatedGroupChat);
+  res.status(201).json(populatedGroupChat);
 });
 
 exports.renameGroup = catchAsync(async (req, res, next) => {
-  const { chatId, chatName } = req.body;
-  const updatedChat = await Chat.findByIdAndUpdate(
-    chatId,
-    {
-      chatName: chatName,
-    },
-    {
-      new: true,
-    }
-  )
-    .populate('users')
-    .populate('groupAdmin');
+  const chatName = req.body.chatName?.trim();
 
-  if (!updatedChat) return next(new AppError(404, 'No chats Found '));
+  if (!chatName) return next(new AppError(400, 'Group name is required'));
+
+  const updatedChat = await populateChat(
+    Chat.findByIdAndUpdate(req.chat._id, { chatName }, { new: true }),
+  );
 
   res.status(200).json({ updatedChat });
 });
 
 exports.addToGroup = catchAsync(async (req, res, next) => {
-  const { chatId, userId } = req.body;
+  const { userId } = req.body;
 
-  const isUserAdded = await Chat.findOne({
-    _id: chatId,
-    users: { $in: [userId] },
-  });
+  if (!isValidObjectId(userId) || !(await User.exists({ _id: userId })))
+    return next(new AppError(404, 'User not found'));
 
-  if (isUserAdded) return next(new AppError(400, 'User already in group chat'));
+  if (req.chat.users.some((id) => id.equals(userId)))
+    return next(new AppError(400, 'User already in group chat'));
 
-  const updatedChat = await Chat.findByIdAndUpdate(
-    chatId,
-    {
-      $push: { users: userId },
-    },
-    {
-      new: true,
-    }
-  )
-    .populate('users')
-    .populate('groupAdmin');
-
-  if (!updatedChat) return next(new AppError(404, 'chat not Found '));
+  const updatedChat = await populateChat(
+    Chat.findByIdAndUpdate(
+      req.chat._id,
+      { $addToSet: { users: userId } },
+      { new: true },
+    ),
+  );
 
   res.status(200).json({ updatedChat });
 });
 
 exports.removeFromGroup = catchAsync(async (req, res, next) => {
-  const { chatId, userId } = req.body;
+  const { userId } = req.body;
+  const { chat, user } = req;
 
-  const chat = await Chat.findById(chatId);
+  const isAdmin = chat.groupAdmin.equals(user._id);
+  const isLeaving = String(userId) === String(user._id);
 
-  if (!chat) return next(new AppError(404, 'No chat found'));
+  if (!isAdmin && !isLeaving)
+    return next(new AppError(403, 'Only the group admin can remove users'));
 
-  if (String(chat.groupAdmin) === userId)
+  if (chat.groupAdmin.equals(userId))
     return next(new AppError(400, 'Cannot remove group admin'));
 
-  const updatedChat = await Chat.findOneAndUpdate(
-    { _id: chatId },
-    {
-      $pull: { users: userId },
-    },
-    {
-      new: true,
-    }
-  )
-    .populate('users')
-    .populate('groupAdmin');
-
-  if (!updatedChat) return next(new AppError(404, 'No chats Found '));
+  const updatedChat = await populateChat(
+    Chat.findByIdAndUpdate(
+      chat._id,
+      { $pull: { users: userId } },
+      { new: true },
+    ),
+  );
 
   res.status(200).json({ updatedChat });
 });
 
 exports.changeGroupImage = catchAsync(async (req, res, next) => {
-  const { chatId } = req.body;
+  if (!req.file) return next(new AppError(400, 'No image provided'));
 
-  if (!req.file) return next(new AppError(404, 'No image provided'));
+  const oldImageId = req.chat.chatImage?.public_id;
+  const chatImage = await uploadImage(req.file);
 
-  const { secure_url, public_id } = await uploadImage(req.file);
-
-  const updatedChat = await Chat.findByIdAndUpdate(
-    chatId,
-    {
-      chatImage: {
-        secure_url,
-        public_id,
-      },
-    },
-    { new: true }
+  const updatedChat = await populateChat(
+    Chat.findByIdAndUpdate(req.chat._id, { chatImage }, { new: true }),
   );
+
+  if (oldImageId) destroy(oldImageId);
+
   res.status(200).json({ updatedChat });
 });
 
 exports.deleteGroup = catchAsync(async (req, res, next) => {
-  const { chatId } = req.body;
+  const { chat } = req;
 
-  if (!chatId) return next(new AppError(404, 'Chat id not provided'));
+  await Promise.all([
+    Message.deleteMany({ chat: chat._id }),
+    Chat.findByIdAndDelete(chat._id),
+  ]);
 
-  const chat = await Chat.findById(chatId).populate('groupAdmin');
-
-  if (!chat) return next(new AppError(404, 'No chat found'));
-
-  if (String(chat.groupAdmin._id) !== String(req.user._id))
-    return next(new AppError(404, 'You are not allowed to delete group back'));
-
-  await Chat.findByIdAndDelete(chatId);
+  if (chat.chatImage?.public_id) destroy(chat.chatImage.public_id);
 
   res.status(200).json({ message: 'Group deleted successfully' });
 });

@@ -1,23 +1,40 @@
+const { isValidObjectId } = require('mongoose');
+const User = require('../models/userModel');
 const AppError = require('../utils/error-handlers/AppError.js');
 const { catchAsync } = require('../utils/error-handlers/catchAsync.js');
 
+const MIN_GROUP_MEMBERS = 2; // besides the creator
+
 const groupValidator = catchAsync(async (req, res, next) => {
-  // eslint-disable-next-line
-  let { users, groupName, groupImage } = req.body;
+  const { users, groupName } = req.body;
 
-  users = users.split(',');
+  if (!users || !groupName?.trim())
+    return next(new AppError(400, 'Please fill all the fields'));
 
-  if (!users || !groupName)
-    return next(new AppError(400, 'Please Fill all the feilds'));
+  // Sent as a comma-separated string from multipart/form-data
+  const list = Array.isArray(users) ? users : String(users).split(',');
+  const creatorId = String(req.user._id);
 
-  if (users.length < 2)
+  const memberIds = [
+    ...new Set(list.map((id) => String(id).trim()).filter(Boolean)),
+  ].filter((id) => id !== creatorId);
+
+  if (!memberIds.every(isValidObjectId))
+    return next(new AppError(400, 'Invalid user id provided'));
+
+  if (memberIds.length < MIN_GROUP_MEMBERS)
     return next(
-      new AppError(400, 'More than 2 users are required to form a group chat')
+      new AppError(
+        400,
+        `At least ${MIN_GROUP_MEMBERS} other users are required to form a group chat`,
+      ),
     );
 
-  users.push(req.user._id);
+  const existingCount = await User.countDocuments({ _id: { $in: memberIds } });
+  if (existingCount !== memberIds.length)
+    return next(new AppError(404, 'Some of the selected users do not exist'));
 
-  req.users = users;
+  req.users = [...memberIds, creatorId];
 
   next();
 });

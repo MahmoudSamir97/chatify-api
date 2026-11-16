@@ -58,28 +58,26 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
 });
 
 exports.addProfileImage = catchAsync(async (req, res, next) => {
-  if (!req.file) return next(new AppError(404, 'No image provided'));
+  if (!req.file) return next(new AppError(400, 'No image provided'));
 
-  const { secure_url, public_id } = await uploadImage(req);
+  const oldImageId = req.user.profileImage?.public_id;
+  const profileImage = await uploadImage(req.file);
 
-  const updatedChat = await User.findByIdAndUpdate(
+  const user = await User.findByIdAndUpdate(
     req.user._id,
-    {
-      profileImage: {
-        secure_url,
-        public_id,
-      },
-    },
-    { new: true }
+    { profileImage },
+    { new: true },
   );
 
-  res.status(200).json({ updatedChat });
+  if (oldImageId) destroy(oldImageId);
+
+  res.status(200).json({ status: 'success', user });
 });
 
 exports.removeProfileImage = catchAsync(async (req, res, next) => {
   const user = await User.findById(req.user._id);
 
-  await destroy(user.profileImage.public_id);
+  if (user.profileImage?.public_id) await destroy(user.profileImage.public_id);
 
   user.profileImage = {
     public_id: '',

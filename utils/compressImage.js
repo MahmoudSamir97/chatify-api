@@ -3,7 +3,8 @@ const sharp = require('sharp');
 exports.compressImage = async (imagePath) => {
   try {
     const resizedImageBuffer = await sharp(imagePath)
-      .resize({ width: 1000 })
+      .rotate() // respect EXIF orientation from phone cameras
+      .resize({ width: 1000, withoutEnlargement: true })
       .jpeg({ quality: 80 })
       .toBuffer();
 

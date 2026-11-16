@@ -45,7 +45,7 @@ exports.createGroupChat = catchAsync(async (req, res) => {
   let secure_url, public_id;
 
   if (req.file) {
-    const { secure_url: url, public_id: Id } = await uploadImage(req);
+    const { secure_url: url, public_id: Id } = await uploadImage(req.file);
     secure_url = url;
     public_id = Id;
   }
@@ -146,7 +146,7 @@ exports.changeGroupImage = catchAsync(async (req, res, next) => {
 
   if (!req.file) return next(new AppError(404, 'No image provided'));
 
-  const { secure_url, public_id } = await uploadImage(req);
+  const { secure_url, public_id } = await uploadImage(req.file);
 
   const updatedChat = await Chat.findByIdAndUpdate(
     chatId,

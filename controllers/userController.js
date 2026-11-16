@@ -3,52 +3,60 @@ const { uploadImage, destroy } = require('../services/cloudinary');
 const AppError = require('../utils/error-handlers/AppError');
 const { catchAsync } = require('../utils/error-handlers/catchAsync');
 
+const SEARCH_RESULTS_LIMIT = 20;
+
+// Treat the search text literally (no regex injection / ReDoS)
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 exports.getUsersForSidebar = catchAsync(async (req, res, next) => {
   const loggedInUserId = req.user._id;
 
   const filteredUsers = await User.find({
     _id: { $ne: loggedInUserId },
-  }).select('-password');
+  });
 
   res.status(200).json(filteredUsers);
 });
 
 exports.getSearchedUsers = catchAsync(async (req, res, next) => {
-  const { search } = req.query;
-  const { user } = req;
+  const search =
+    typeof req.query.search === 'string' ? req.query.search.trim() : '';
 
-  const keyword = search
-    ? {
-        $or: [
-          { username: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } },
-        ],
-      }
-    : {};
-  if (!keyword)
-    return next(new AppError(404, "Enter user's email or username to serach "));
+  if (!search) return res.status(200).json([]);
 
-  const users = await User.find(keyword).find({ _id: { $ne: user?._id } });
+  const pattern = new RegExp(escapeRegex(search), 'i');
+
+  const users = await User.find({
+    _id: { $ne: req.user._id },
+    $or: [{ username: pattern }, { email: pattern }],
+  })
+    .select('username email fullname profileImage')
+    .limit(SEARCH_RESULTS_LIMIT);
 
   res.status(200).json(users);
 });
 
 exports.showProfile = catchAsync(async (req, res, next) => {
-  if (!req.user._id) return next(new AppError(404, 'Missing user Id'));
-
-  const user = await User.findById(req.user._id);
-
-  if (!user) return next(new AppError(404, 'No user founded'));
-
-  res.status(200).json({ user });
+  res.status(200).json({ user: req.user });
 });
 
 exports.updateProfile = catchAsync(async (req, res, next) => {
-  const updatedUser = await User.findByIdAndUpdate(
-    req.user._id,
-    { ...req.body },
-    { new: true }
-  );
+  const updates = {};
+
+  ['fullname', 'username', 'phoneNumber', 'bio'].forEach((field) => {
+    const value = req.body[field];
+    // Empty fullname/username means "unchanged", while bio/phone can be cleared
+    const isRequiredField = field === 'fullname' || field === 'username';
+
+    if (value === undefined || (isRequiredField && value === '')) return;
+
+    updates[field] = value;
+  });
+
+  const updatedUser = await User.findByIdAndUpdate(req.user._id, updates, {
+    new: true,
+    runValidators: true,
+  });
 
   res.status(200).json({
     status: 'success',

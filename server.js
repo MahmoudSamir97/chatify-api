@@ -1,113 +1,43 @@
 require('dotenv').config();
-const express = require('express');
-const app = express();
-const helmet = require('helmet');
-const mongoSanitize = require('express-mongo-sanitize');
-const authRouter = require('./routes/auth.routes');
-const userRouter = require('./routes/user.routes');
-const messageRouter = require('./routes/message.routes');
-const chatRouter = require('./routes/chat.routes');
-const { globalErrorHandler } = require('./controllers/errorController');
-const hpp = require('hpp');
-const { rateLimit } = require('express-rate-limit');
-const { Server } = require('socket.io');
 const http = require('http');
-const cors = require('cors');
-const cookieParser = require('cookie-parser');
+const mongoose = require('mongoose');
+const app = require('./app');
+const initSocket = require('./socket');
 const connectToMongoDB = require('./config/DBconfig');
-const AppError = require('./utils/error-handlers/AppError');
+
 const PORT = process.env.PORT || 5000;
 
-app.set('trust proxy', 1);
+const REQUIRED_ENV = ['DATABASE_URL', 'JWT_SECRET'];
+const missingEnv = REQUIRED_ENV.filter((name) => !process.env[name]);
 
-const limiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  limit: 100, // Limit each IP to 100 requests per `window` .
-  message: 'Too many requests! try again in one hour',
-});
-
-const userSocketMap = {};
-
-app.use(
-  cors({
-    origin: 'https://chatify-react.onrender.com',
-    credentials: true,
-  })
-);
-
-app.use(express.json());
-app.use(helmet());
-app.use(limiter);
-app.use(mongoSanitize());
-app.use(hpp());
-app.use(cookieParser());
-
-app.use('/api/auth', authRouter);
-app.use('/api/message', messageRouter);
-app.use('/api/chat', chatRouter);
-app.use('/api/user', userRouter);
+if (missingEnv.length) {
+  console.error(`Missing required env variables: ${missingEnv.join(', ')}`);
+  process.exit(1);
+}
 
 const server = http.createServer(app);
 
-const io = new Server(server, {
-  cors: {
-    origin: ['https://chatify-react.onrender.com'],
-    methods: ['GET', 'POST'],
-  },
-});
+// Controllers emit real-time events through the same io instance
+app.set('io', initSocket(server));
 
-io.on('connection', (socket) => {
-  console.log('a user connected', socket.id);
+const start = async () => {
+  await connectToMongoDB();
 
-  const userId = socket.handshake.query.userId;
-
-  if (userId) userSocketMap[userId] = socket.id;
-
-  io.emit('getOnlineUsers', Object.keys(userSocketMap));
-
-  socket.on('setup', (userData) => {
-    socket.join(userData._id);
+  server.listen(PORT, () => {
+    console.log(`Listening to server on port ${PORT}`);
   });
+};
 
-  socket.on('join chat', (room) => {
-    console.log('user joinded room', room);
-    socket.join(room);
+const shutdown = (signal) => {
+  console.log(`${signal} received, shutting down gracefully...`);
+
+  server.close(async () => {
+    await mongoose.connection.close();
+    process.exit(0);
   });
+};
 
-  socket.on('typing', (room) => socket.in(room).emit('typing'));
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
-  socket.on('stop typing', (room) => socket.in(room).emit('stop typing'));
-
-  socket.on('newMessage', (newMessageRecieved) => {
-    const chat = newMessageRecieved.chat;
-
-    if (!chat.users.length) return console.log('chat.users not defined');
-
-    const users = chat.isGroupChat
-      ? chat.users.map((user) => user._id)
-      : [chat.users[0]._id, chat.users[1]._id];
-
-    users.forEach((userId) => {
-      socket.broadcast.to(userId).emit('message received', newMessageRecieved);
-    });
-  });
-
-  socket.on('disconnect', () => {
-    console.log('user disconnected', socket.id);
-
-    delete userSocketMap[userId];
-
-    io.emit('getOnlineUsers', Object.keys(userSocketMap));
-  });
-});
-
-app.all('*', (req, res, next) => {
-  next(new AppError(404, `Can't find ${req.originalUrl} on this server!`));
-});
-
-app.use(globalErrorHandler);
-
-server.listen(PORT, () => {
-  connectToMongoDB();
-  console.log(`Listening to server on port ${PORT}`);
-});
+start();

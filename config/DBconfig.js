@@ -2,11 +2,12 @@ const mongoose = require('mongoose');
 
 const connectToMongoDB = async () => {
   try {
-    const DB = process.env.DATABASE_URL;
-    await mongoose.connect(DB);
+    await mongoose.connect(process.env.DATABASE_URL);
     console.log('Connected to the database successfully 😎');
   } catch (error) {
-    console.log('Error connecting to the database', error.message);
+    // The API is useless without a database, so fail fast and let the platform restart us
+    console.error('Error connecting to the database', error.message);
+    process.exit(1);
   }
 };
 

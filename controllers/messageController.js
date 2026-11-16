@@ -4,14 +4,26 @@ const User = require('../models/userModel');
 const AppError = require('../utils/error-handlers/AppError');
 const { catchAsync } = require('../utils/error-handlers/catchAsync');
 
-exports.sendMessage = catchAsync(async (req, res, next) => {
-  const { chatId, content } = req.body;
+const MAX_MESSAGE_LENGTH = 5000;
 
-  if (!chatId || !content) return next(new AppError(400, 'No data provided'));
+exports.sendMessage = catchAsync(async (req, res, next) => {
+  const content =
+    typeof req.body.content === 'string' ? req.body.content.trim() : '';
+  const { chat } = req;
+
+  if (!content) return next(new AppError(400, 'Message content is required'));
+
+  if (content.length > MAX_MESSAGE_LENGTH)
+    return next(
+      new AppError(
+        400,
+        `Message is longer than ${MAX_MESSAGE_LENGTH} characters`,
+      ),
+    );
 
   let newMessage = await Message.create({
     sender: req.user._id,
-    chat: chatId,
+    chat: chat._id,
     content,
   });
 
@@ -24,23 +36,28 @@ exports.sendMessage = catchAsync(async (req, res, next) => {
     select: 'username profileImage email',
   });
 
-  await Chat.findByIdAndUpdate(chatId, {
+  await Chat.findByIdAndUpdate(chat._id, {
     latestMessage: newMessage._id,
   });
 
-  res.status(200).json({ newMessage });
+  // Deliver in real time from the server, using data we persisted ourselves
+  // (never relay a client-provided payload to other users).
+  const io = req.app.get('io');
+
+  chat.users
+    .filter((userId) => !userId.equals(req.user._id))
+    .forEach((userId) =>
+      io?.to(String(userId)).emit('message received', newMessage),
+    );
+
+  res.status(201).json({ newMessage });
 });
 
 exports.getMessages = catchAsync(async (req, res, next) => {
-  const { chatId } = req.params;
-
-  if (!chatId) return next(new AppError(400, 'No Chat id provided'));
-
-  const messages = await Message.find({ chat: chatId })
+  const messages = await Message.find({ chat: req.chat._id })
+    .sort({ createdAt: 1 })
     .populate('sender', 'username profileImage email')
     .populate('chat');
-
-  if (!messages) return next(new AppError(404, 'No messages founded'));
 
   res.status(200).json({ messages });
 });

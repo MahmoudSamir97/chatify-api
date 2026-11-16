@@ -7,7 +7,7 @@ const authRouter = require('./routes/auth.routes');
 const userRouter = require('./routes/user.routes');
 const messageRouter = require('./routes/message.routes');
 const chatRouter = require('./routes/chat.routes');
-const { globaleErrorHandler } = require('./controllers/errorController');
+const { globalErrorHandler } = require('./controllers/errorController');
 const hpp = require('hpp');
 const { rateLimit } = require('express-rate-limit');
 const { Server } = require('socket.io');
@@ -105,7 +105,7 @@ app.all('*', (req, res, next) => {
   next(new AppError(404, `Can't find ${req.originalUrl} on this server!`));
 });
 
-app.use(globaleErrorHandler);
+app.use(globalErrorHandler);
 
 server.listen(PORT, () => {
   connectToMongoDB();

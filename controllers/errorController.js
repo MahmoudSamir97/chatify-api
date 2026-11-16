@@ -1,72 +1,66 @@
 const AppError = require('../utils/error-handlers/AppError');
 
-const handleCastErrorFromDB = (err) => {
-  const message = `Invalid ${err.path} with value ${err.value}`;
-
-  return new AppError(400, message);
-};
+const handleCastErrorFromDB = (err) =>
+  new AppError(400, `Invalid ${err.path} with value ${err.value}`);
 
 const handleDuplicateFieldsFromDB = (err) => {
   const fieldname = Object.keys(err.keyValue)[0];
 
-  const message = `Duplicate ${fieldname} value, please choose unique value`;
-
-  return new AppError(400, message);
+  return new AppError(
+    400,
+    `Duplicate ${fieldname} value, please choose unique value`,
+  );
 };
+
 const handleValidationsErrorFromDB = (err) => {
   const errors = Object.values(err.errors).map((item) => item.message);
 
-  const message = `Invalid input data. ${errors.join(' .')}`;
-
-  return new AppError(400, message);
+  return new AppError(400, `Invalid input data. ${errors.join('. ')}`);
 };
 
-const sendErrorDev = (res, err) => {
-  res.status(err.statusCode).json({
-    status: err.status,
-    error: err,
-    message: err.message,
-    stack: err.stack,
-  });
+// Translate known library errors into operational AppErrors.
+// Returns null for unexpected errors (bugs), which must not leak details.
+const toOperationalError = (err) => {
+  if (err.isOperational) return err;
+  if (err.name === 'CastError') return handleCastErrorFromDB(err);
+  if (err.code === 11000) return handleDuplicateFieldsFromDB(err);
+  if (err.name === 'ValidationError') return handleValidationsErrorFromDB(err);
+  if (err.name === 'JsonWebTokenError')
+    return new AppError(401, 'Invalid token, please log in again');
+  if (err.name === 'TokenExpiredError')
+    return new AppError(401, 'Your session has expired, please log in again');
+  if (err.name === 'MulterError') return new AppError(400, err.message);
+  // body-parser errors (malformed JSON, payload too large, ...)
+  if (err.expose && err.status < 500)
+    return new AppError(err.status, err.message);
+
+  return null;
 };
 
-const sendErrorProd = (res, err) => {
-  // Expected error, send it to client!
+exports.globalErrorHandler = (err, req, res, next) => {
+  const operationalError = toOperationalError(err);
 
-  if (err.isOperational) {
-    res.status(err.statusCode).json({
-      status: err.status,
-      message: err.message,
-    });
-  }
-
-  // unexpected error , from unkonwn resource. dont send error details !
-  else {
-    console.error('😁', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'something went wrong!',
-    });
-  }
-};
-
-exports.globaleErrorHandler = (err, req, res, next) => {
-  err.statusCode = err.statusCode || 500;
-
-  err.status = err.status || 'error';
+  if (!operationalError) console.error('Unexpected error 💥', err);
 
   if (process.env.NODE_ENV === 'development') {
-    sendErrorDev(res, err);
+    const error = operationalError || err;
+
+    return res.status(error.statusCode || 500).json({
+      status: error.status || 'error',
+      message: error.message,
+      stack: err.stack,
+    });
   }
-  if (process.env.NODE_ENV === 'production') {
-    if (err.kind === 'ObjectId') {
-      sendErrorProd(res, handleCastErrorFromDB(err));
-    } else if (err.code === 11000) {
-      sendErrorProd(res, handleDuplicateFieldsFromDB(err));
-    } else if (err.name === 'ValidationError') {
-      sendErrorProd(res, handleValidationsErrorFromDB(err));
-    } else {
-      sendErrorProd(res, new AppError(err.statusCode, err.message));
-    }
+
+  if (operationalError) {
+    return res.status(operationalError.statusCode).json({
+      status: operationalError.status,
+      message: operationalError.message,
+    });
   }
+
+  res.status(500).json({
+    status: 'error',
+    message: 'Something went wrong!',
+  });
 };

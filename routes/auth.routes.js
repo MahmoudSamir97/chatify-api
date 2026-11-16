@@ -3,6 +3,7 @@ const authRouter = require('express').Router();
 const resetSchema = require('../utils/validation-schema/resetPasswordSchema');
 const signupSchema = require('../utils/validation-schema/signupSchema');
 const { validation } = require('../middlewares/validation');
+const { authLimiter } = require('../middlewares/rateLimiters');
 const {
   signup,
   login,
@@ -12,17 +13,23 @@ const {
   verifyEmail,
 } = require('../controllers/authController');
 
-authRouter.post('/signup', validation({ body: signupSchema }), signup);
+authRouter.post(
+  '/signup',
+  authLimiter,
+  validation({ body: signupSchema }),
+  signup,
+);
 authRouter.get('/:id/verify/:token', verifyEmail);
-authRouter.post('/login', login);
-authRouter.post('/forget-password', forgetPassword);
+authRouter.post('/login', authLimiter, login);
+authRouter.post('/forget-password', authLimiter, forgetPassword);
 authRouter.post('/logout', logout);
 
 authRouter.post(
   '/reset-password/:id/:token',
+  authLimiter,
   resetMiddleware,
   validation({ body: resetSchema }),
-  resetPassword
+  resetPassword,
 );
 
 module.exports = authRouter;
